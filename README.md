@@ -219,5 +219,5 @@ This tool is for personal use only. Respect copyright laws and subtitle licensin
 
 ---
 
-Made with ❤️ by [David (davru) Sanchez Rubio](https://davru.dev)
+Made with ❤️ by [davru](https://davru.dev)
 

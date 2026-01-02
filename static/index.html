@@ -93,13 +93,32 @@
                     document.getElementById('subtitle-results').innerHTML = '<p>No se encontraron subtítulos en inglés para este contenido.</p>';
                     return;
                 }
+
+                // Ordenar: primero por temporada, luego por episodio
+                data.sort((a, b) => {
+                    const sA = a.season_number || 0;
+                    const sB = b.season_number || 0;
+                    if (sA !== sB) return sA - sB;
+                    
+                    const eA = a.episode_number || 0;
+                    const eB = b.episode_number || 0;
+                    return eA - eB;
+                });
                 
                 data.forEach(item => {
                     const div = document.createElement('div');
                     div.className = 'result-item';
+                    
+                    let prefix = '';
+                    if (item.season_number) {
+                        const s = item.season_number.toString().padStart(2, '0');
+                        const e = item.episode_number ? item.episode_number.toString().padStart(2, '0') : '??';
+                        prefix = `[T${s} - E${e}] `;
+                    }
+
                     div.innerHTML = `
                         <div class="result-info">
-                            <strong>${item.movie_name} (${item.year}) ${item.season_number ? '- S'+item.season_number : ''}${item.episode_number ? 'E'+item.episode_number : ''}</strong><br>
+                            <strong>${prefix}${item.movie_name} (${item.year})</strong><br>
                             <small>Archivo: ${item.file_name} | Descargas: ${item.downloads}</small>
                         </div>
                         <button onclick="processSub('${item.file_id}', '${item.file_name}', '${imdbId}', '${(item.movie_name || '').replace(/'/g, "\\'")}', '${item.year || ''}', '${contentType}', '${item.season_number || ''}', '${item.episode_number || ''}')">Traducir y Subir</button>

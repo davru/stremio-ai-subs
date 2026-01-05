@@ -6,12 +6,12 @@ STREMIO_EMAIL = os.getenv("STREMIO_EMAIL")
 STREMIO_PASSWORD = os.getenv("STREMIO_PASSWORD")
 
 class StremioUploader:
-    async def upload_subtitle(self, file_path, imdb_id, content_type="movie"):
+    async def upload_subtitle(self, file_path, imdb_id, content_type="movie", season=None, episode=None):
         if not STREMIO_EMAIL or not STREMIO_PASSWORD:
             print("❌ Error: Falta configuración de STREMIO_EMAIL o STREMIO_PASSWORD")
             return False
 
-        print(f"🚀 Iniciando subida para {imdb_id}...")
+        print(f"🚀 Iniciando subida para {imdb_id} (Tipo: {content_type}, S:{season} E:{episode})...")
         
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True) # Headless por defecto
@@ -57,17 +57,25 @@ class StremioUploader:
 
                 # Tipo de contenido
                 print("🗣 Seleccionando tipo de contenido...")
-                # Intentar seleccionar opción que contenga "Spanish" o "Español"
                 select = await page.query_selector('select#content_type')
                 if select:
+                    # Mapeo simple: si es "episode" o "series", buscamos Episode o Series
+                    target_type = "series" if content_type.lower() in ["series", "episode", "tv show"] else "movie"
+                    
                     options = await select.query_selector_all('option')
-                    # Tenemos los tipos "movie" y "series"
                     for opt in options:
                         text = await opt.text_content()
-                        if content_type.lower() in text.lower():
+                        if target_type.lower() in text.lower():
                             val = await opt.get_attribute('value')
                             await select.select_option(val)
                             break
+
+                # Rellenar Season y Episode si aplica
+                if season and episode:
+                    print(f"🔢 Rellenando Temporada {season} y Episodio {episode}...")
+                    # Intento 1: IDs/Names sugeridos
+                    await page.fill('input[name="season_number"], input[id="season_number"]', str(season))
+                    await page.fill('input[name="episode_number"], input[id="episode_number"]', str(episode))
                 
                 # Idioma
                 # Asumimos un select. Seleccionamos 'Spanish' o 'es' por label o value.

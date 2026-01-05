@@ -33,6 +33,8 @@ class ProcessRequest(BaseModel):
     title: str | None = None
     year: str | int | None = None
     content_type: str = "movie"  # "movie" o "series"
+    season_number: int | None = None
+    episode_number: int | None = None
 
 def cleanup_file(path: str):
     try:
@@ -41,9 +43,9 @@ def cleanup_file(path: str):
     except Exception as e:
         print(f"Error borrando temp: {e}")
 
-async def run_upload_task(file_path: str, imdb_id: str, content_type: str = "movie"):
+async def run_upload_task(file_path: str, imdb_id: str, content_type: str = "movie", season: int = None, episode: int = None):
     if imdb_id:
-        success = await uploader.upload_subtitle(file_path, imdb_id, content_type)
+        success = await uploader.upload_subtitle(file_path, imdb_id, content_type, season, episode)
         if success:
             print("🎉 Subida completada exitosamente.")
         else:
@@ -80,14 +82,31 @@ async def search_subtitles(imdb_id: str, kind: str = "movie"):
             if files:
                 file_id = files[0].get('file_id')
                 file_name = files[0].get('file_name')
+                
+                # Extraer season y episode de feature_details si existen
+                feature_details = attrs.get('feature_details', {})
+                season_num = feature_details.get('season_number')
+                episode_num = feature_details.get('episode_number')
+                
+                # Si no están en feature_details, intentar extraerlos del nombre del archivo (fallback)
+                if not season_num or not episode_num:
+                    import re
+                    # Regex para S01E01, 1x01, etc.
+                    match = re.search(r'[sS](\d+)[eE](\d+)', file_name)
+                    if match:
+                        season_num = int(match.group(1))
+                        episode_num = int(match.group(2))
+
                 simplified.append({
                     "id": item.get('id'),
                     "file_id": file_id,
                     "file_name": file_name,
                     "language": attrs.get('language'),
-                    "movie_name": attrs.get('feature_details', {}).get('movie_name'),
-                    "year": attrs.get('feature_details', {}).get('year'),
-                    "downloads": attrs.get('download_count')
+                    "movie_name": feature_details.get('movie_name'),
+                    "year": feature_details.get('year'),
+                    "downloads": attrs.get('download_count'),
+                    "season_number": season_num,
+                    "episode_number": episode_num
                 })
         return simplified
     except Exception as e:
@@ -108,7 +127,7 @@ async def process_subtitle(request: ProcessRequest, background_tasks: Background
         
         # 3. Traducir
         print("Traduciendo contenido...")
-        translated_content = translator.translate_srt(srt_content)
+        translated_content = await translator.translate_srt(srt_content)
         
         # 4. Guardar archivo temporalmente para subirlo
         if request.title:
@@ -128,11 +147,19 @@ async def process_subtitle(request: ProcessRequest, background_tasks: Background
         temp_path = os.path.join("temp", new_filename)
         with open(temp_path, "w", encoding="utf-8") as f:
             f.write(translated_content)
-            
+
         # 5. Programar subida en segundo plano
+        print(request)
         if request.imdb_id:
-            print(f"📅 Programando subida automática para: {request.imdb_id}")
-            background_tasks.add_task(run_upload_task, temp_path, request.imdb_id, request.content_type)
+            print(f"📅 Programando subida automática para: {request.imdb_id} (S{request.season_number}E{request.episode_number})")
+            background_tasks.add_task(
+                run_upload_task, 
+                temp_path, 
+                request.imdb_id, 
+                request.content_type, 
+                request.season_number, 
+                request.episode_number
+            )
         else:
             print("⚠️ No hay IMDb ID, se omite la subida automática.")
         

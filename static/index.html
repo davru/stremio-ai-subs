@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Traductor de Subtítulos AI</title>
+    <style>
+        body { font-family: sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; background-color: #f4f4f4; }
+        .container { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        input[type="text"] { width: 70%; padding: 10px; font-size: 16px; }
+        button { padding: 10px 20px; font-size: 16px; cursor: pointer; background-color: #007bff; color: white; border: none; border-radius: 4px; }
+        button:hover { background-color: #0056b3; }
+        .result-item { border-bottom: 1px solid #eee; padding: 15px 0; display: flex; justify-content: space-between; align-items: center; }
+        .result-info { flex: 1; }
+        .loading { color: #666; font-style: italic; display: none; margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Traductor de Subtítulos (OpenSubtitles + AI)</h1>
+        
+        <div style="display: flex; gap: 10px;">
+            <input type="text" id="query" placeholder="Buscar película o serie (ej: The Mandalorian S01E01)...">
+            <button onclick="search()">Buscar</button>
+        </div>
+
+        <div id="loading" class="loading">Buscando...</div>
+        <div id="processing" class="loading">Traduciendo con IA (esto puede tardar unos minutos)...</div>
+
+        <div id="results"></div>
+    </div>
+
+    <script>
+        async function search() {
+            const query = document.getElementById('query').value;
+            if (!query) return;
+
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('results').innerHTML = '';
+
+            try {
+                const res = await fetch(`/api/search?query=${encodeURIComponent(query)}`);
+                const data = await res.json();
+                
+                document.getElementById('loading').style.display = 'none';
+                
+                if (data.length === 0) {
+                    document.getElementById('results').innerHTML = '<p>No se encontraron resultados.</p>';
+                    return;
+                }
+
+                data.forEach(item => {
+                    const div = document.createElement('div');
+                    div.className = 'result-item';
+                    div.innerHTML = `
+                        <div class="result-info">
+                            <strong>${item.movie_name} (${item.year})</strong><br>
+                            <small>Archivo: ${item.file_name} | Descargas: ${item.downloads}</small>
+                        </div>
+                        <button onclick="processSub('${item.file_id}', '${item.file_name}')">Traducir al Español</button>
+                    `;
+                    document.getElementById('results').appendChild(div);
+                });
+
+            } catch (error) {
+                console.error(error);
+                document.getElementById('loading').style.display = 'none';
+                alert('Error al buscar');
+            }
+        }
+
+        async function processSub(fileId, fileName) {
+            if (!confirm(`¿Quieres traducir "${fileName}" usando IA?`)) return;
+
+            document.getElementById('processing').style.display = 'block';
+            
+            try {
+                const res = await fetch('/api/process', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ file_id: parseInt(fileId), file_name: fileName })
+                });
+
+                if (!res.ok) throw new Error('Error en el proceso');
+
+                const blob = await res.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                
+                // Asegurar extensión .srt en el frontend también
+                let downloadName = `ES_${fileName}`;
+                if (!downloadName.toLowerCase().endsWith('.srt')) {
+                    downloadName += '.srt';
+                }
+                a.download = downloadName;
+                
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                
+                alert('¡Traducción completada y descargada!');
+            } catch (error) {
+                console.error(error);
+                alert('Ocurrió un error en la traducción.');
+            } finally {
+                document.getElementById('processing').style.display = 'none';
+            }
+        }
+    </script>
+</body>
+</html>

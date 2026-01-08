@@ -126,8 +126,8 @@ async def process_subtitle(request: ProcessRequest, background_tasks: Background
         srt_content = srt_response.text
         
         # 3. Traducir
-        print("Traduciendo contenido...")
-        translated_content = await translator.translate_srt(srt_content)
+        print(f"Traduciendo contenido para: {request.title or 'Unknown'}...")
+        translated_content = await translator.translate_srt(srt_content, title=request.title)
         
         # 4. Guardar archivo temporalmente para subirlo
         if request.title:

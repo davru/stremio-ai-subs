@@ -1,51 +1,181 @@
+import re
+import ollama
 import os
-from playwright.async_api import async_playwright
+import google.generativeai as genai
+from ollama import AsyncClient
+import asyncio
+import time
 
 class TranslatorService:
     def __init__(self):
-        pass
+        # Configurar Gemini si hay API Key
+        self.gemini_key = os.getenv("GEMINI_API_KEY")
+        if self.gemini_key:
+            genai.configure(api_key=self.gemini_key)
+            # Usar Gemini 2.0 Flash (Disponible en 2026, más rápido y capaz)
+            self.model_name = "gemini-2.0-flash"
+            self.use_gemini = True
+            print(f"✨ Using Google Gemini API ({self.model_name})")
+            
+            # Inicializar también Ollama como fallback
+            self.client = AsyncClient()
+            self.model_ollama = "llama3.2:latest"
+        else:
+            self.use_gemini = False
+            self.model_ollama = "llama3.2:latest"
+            self.client = AsyncClient()
+            print(f"🦙 Using Local Ollama ({self.model_ollama})")
 
-    async def _translate_chunk_in_browser(self, page, text):
-        js_code = """
-        async (text) => {
-            if (!('Translator' in self)) {
-                return "ERROR: API 'Translator' no encontrada. Asegúrate de usar Chrome actualizado y habilitar flags.";
-            }
-            if (!window.myTranslator) {
-                try {
-                    window.myTranslator = await Translator.create({
-                        sourceLanguage: 'en',
-                        targetLanguage: 'es'
-                    });
-                } catch (e) {
-                    return "ERROR: Fallo creando traductor: " + e.message;
-                }
-            }
-            try {
-                return await window.myTranslator.translate(text);
-            } catch (e) {
-                 return "ERROR: Fallo traduciendo: " + e.message;
-            }
-        }
-        """
-        return await page.evaluate(js_code, text)
+    async def _translate_gemini_full_content(self, srt_content, title=None):
+        """Traduce TODO el contenido de una vez usando el contexto masivo de Gemini"""
+        model = genai.GenerativeModel(self.model_name)
+        
+        context_instruction = f"Context: You are translating subtitles for the movie/series '{title}'." if title else "Context: You are translating subtitles for a movie/series."
+        
+        prompt = (
+            "You are a professional movie and series translator. Your task is to translate the following SRT content from English to Spanish (Spain).\n"
+            f"{context_instruction}\n"
+            "STRICT RULES:\n"
+            "1. Output valid SRT format ONLY. Do not wrap in markdown code blocks.\n"
+            "2. Preserve all timestamps and indices exactly.\n"
+            "3. Translate text content to natural, idiomatic Spanish (Spain).\n"
+            "4. KEEP keys/tags: [BR], <i>, <b>, <u>, </i>, </b>, </u>, ♪, ♫, #, and any other special symbol.\n"
+            "5. Do NOT translate speaker names if they appear in uppercase (e.g. 'JOHN:').\n"
+            "6. Provide the FULL translation for the input provided.\n\n"
+            "INPUT SRT CONTENT:\n"
+            f"{srt_content}"
+        )
+        
+        try:
+             # Gemini 1.5 Flash supports ~1M tokens, so we can send the whole file usually.
+             # However, for huge files, we might occasionally split, but SRTs are small (50k chars).
+             
+             # Run in executor because genai is sync (mostly)
+             loop = asyncio.get_event_loop()
+             response = await loop.run_in_executor(None, lambda: model.generate_content(prompt))
+             return response.text.replace("```srt", "").replace("```", "").strip()
+        except Exception as e:
+            print(f"❌ Gemini Error: {e}")
+            raise e
+
+    async def _translate_batch(self, texts, title=None):
+        # ESTRATEGIA: Lista numerada (Más robusto que JSON para modelos pequeños como Llama 3 3B)
+        
+        # 1. Construir entrada numerada
+        input_formatted = ""
+        for i, text in enumerate(texts):
+            input_formatted += f"ITEM_{i}: {text}\n"
+
+        context_instruction = f"Contexto: Estas traduciendo subtítulos para la película/serie '{title}'." if title else "Contexto: Traducción de subtítulos."
+
+        prompt = (
+            f"Actúa como traductor profesional de EN a ES (España). {context_instruction}\n"
+            "INSTRUCCIONES CLAVE:\n"
+            "1. Traduce cada línea manteniendo el prefijo exacto 'ITEM_N: '.\n"
+            "2. NO toques las etiquetas [BR], <i>, <b>, <u>, ♪, ♫.\n"
+            "3. NO añadas charla, ni introducciones. Solo la lista traducida.\n"
+            "4. Respeta el Español de España (idiomático).\n\n"
+            "TEXTO A TRADUCIR:\n"
+            f"{input_formatted}"
+        )
+        
+        try:
+             # Usamos format='' (texto plano) porque JSON falla mucho en modelos pequeños
+             response = await self.client.chat(
+                model=self.model_ollama, 
+                messages=[{'role': 'user', 'content': prompt}],
+                options={'temperature': 0.1, 'num_ctx': 4096} # Aumentar ventana de contexto si es posible
+             )
+             content = response['message']['content'].strip()
+             
+             # Parsear salida
+             translated_map = {}
+             lines = content.split('\n')
+             for line in lines:
+                 match = re.match(r'ITEM_(\d+):\s*(.*)', line)
+                 if match:
+                     idx = int(match.group(1))
+                     text = match.group(2).strip()
+                     translated_map[idx] = text
+            
+             # Reconstruir lista ordenada
+             result_list = []
+             for i in range(len(texts)):
+                 # Si falta alguna línea, usamos el original como fallback en lugar de fallar todo el batch
+                 result_list.append(translated_map.get(i, texts[i]))
+                 
+             return result_list
+
+        except Exception as e:
+             print(f"❌ Error batch Ollama: {e}")
+             return None
+
+    async def _translate_single(self, text, title=None):
+        context_instruction = f"Context: You are translating subtitles for '{title}'." if title else ""
+        prompt = (
+            f"Translate exactly this text to Spanish (Spain). {context_instruction}\n"
+            "Preserve [BR] tags.\n"
+            "Preserve tags <i>, <b>, <u> and symbols ♪, ♫, #.\n"
+            "Output ONLY the translation.\n\n"
+            f"{text}"
+        )
+        try:
+            response = await self.client.chat(model=self.model_ollama, messages=[{'role': 'user', 'content': prompt}])
+            return response['message']['content'].strip()
+        except:
+            return text 
 
     def _parse_srt(self, content):
-        import re
+        # Normalizar saltos de línea
         content = content.replace('\r\n', '\n').replace('\r', '\n')
-        parts = re.split(r'\n\n+', content.strip())
+        lines = [l.strip() for l in content.split('\n')]
+        
         blocks = []
-        for part in parts:
-            lines = part.split('\n')
-            if len(lines) >= 3:
-                # Detectar índice y tiempos
-                if lines[0].strip().isdigit() and '-->' in lines[1]:
-                    block = {
-                        'index': lines[0].strip(),
-                        'time': lines[1].strip(),
-                        'original_text': "\n".join(lines[2:])
-                    }
-                    blocks.append(block)
+        current_block = None
+        
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            
+            # Heurística robusta: Si encontramos un número solo en una línea...
+            # Y la SIGUIENTE línea contiene '-->', entonces es cabecera de bloque.
+            is_header = False
+            if line.isdigit() and (i + 1 < len(lines)):
+                if '-->' in lines[i+1]:
+                    is_header = True
+            
+            if is_header:
+                # Si había un bloque abierto, lo cerramos y guardamos
+                if current_block:
+                    # Parse text list to string
+                    current_block['original_text'] = "\n".join(current_block['text_lines'])
+                    del current_block['text_lines'] # Clean up
+                    blocks.append(current_block)
+                
+                # Iniciamos nuevo bloque
+                current_block = {
+                    'index': line,
+                    'time': lines[i+1],
+                    'text_lines': []
+                }
+                i += 2 # Saltamos linea indice y linea tiempo
+                continue
+            
+            # Si estamos dentro de un bloque, acumulamos texto
+            if current_block is not None:
+                # Si la linea no está vacía, es texto.
+                # Ignoramos lineas vacias dentro del bloque para no meter ruido.
+                if line:
+                    current_block['text_lines'].append(line)
+            
+            i += 1
+            
+        # Añadir el último bloque pendiente
+        if current_block:
+            current_block['original_text'] = "\n".join(current_block['text_lines'])
+            if 'text_lines' in current_block: del current_block['text_lines']
+            blocks.append(current_block)
+            
         return blocks
 
     def _reconstruct_srt(self, blocks):
@@ -55,110 +185,67 @@ class TranslatorService:
             output.append(f"{b['index']}\n{b['time']}\n{text}")
         return "\n\n".join(output)
 
-    async def translate_srt(self, srt_content):
-        import re 
+    async def translate_srt(self, srt_content, title=None):
+        if self.use_gemini:
+             print("⚡️ Fast Translation with Gemini Flash...")
+             # Dividir en chunks si es MASIVO (>800kb), pero SRTs normales caben de sobra.
+             # Gemini Flash soporta ~700,000 palabras. Un SRT tiene ~5,000.
+             # enviamos directo.
+             try:
+                translated = await self._translate_gemini_full_content(srt_content, title)
+                return translated
+             except Exception as e:
+                print(f"⚠️ Gemini request failed: {e}. Falling back to Ollama if available...")
+                if not hasattr(self, 'client') or not self.client: 
+                     raise e
+
+        # Verificar disponibilidad de Ollama
+        try:
+            # Una pequeña llamada para despertar el modelo o verificar conexión
+            if not self.use_gemini:
+                # Solo comprobamos explicitamente si no venimos de un fallback
+                # en fallback asumimos que vamos a instanciar/usar el cliente
+                await self.client.show(self.model_ollama)
+        except Exception as e:
+            print(f"❌ Error conectando con Ollama ({self.model_ollama}). Asegúrate de que Ollama está corriendo.")
+            raise e
+
         blocks = self._parse_srt(srt_content)
         print(f"🧩 Parsed {len(blocks)} subtitle blocks.")
         
-        # Agrupar por chunks de tamaño seguro para el navegador
-        MAX_CHUNK_SIZE = 1000 
-        SEPARATOR = " ||| "
+        # Agrupar por cantidad de items
+        # Reducimos tamaño de batch para modelos pequeños (Llama 3.2 3B)
+        # Batch de 10 es un buen equilibrio velocidad/estabilidad 
+        BATCH_SIZE = 10
         
-        batches = []
-        current_batch = []
-        current_batch_length = 0
+        batches = [blocks[i:i + BATCH_SIZE] for i in range(0, len(blocks), BATCH_SIZE)]
+
+        print(f"📦 Created {len(batches)} batches for translation via Ollama ({self.model_ollama}).")
         
-        for block in blocks:
-            text_len = len(block['original_text'])
-            if current_batch and (current_batch_length + text_len + len(SEPARATOR)) > MAX_CHUNK_SIZE:
-                batches.append(current_batch)
-                current_batch = []
-                current_batch_length = 0
-            
-            current_batch.append(block)
-            current_batch_length += text_len + len(SEPARATOR)
-            
-        if current_batch:
-            batches.append(current_batch)
-
-        print(f"📦 Created {len(batches)} batches for translation.")
-
-        print("🌍 Lanzando navegador para traducción local (Translation API)...")
-        async with async_playwright() as p:
-            # ...existing code...
-            browser = None
-            possible_paths = [
-                "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
-                "/Applications/Google Chrome Dev.app/Contents/MacOS/Google Chrome Dev",
-                "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" 
-            ]
-            executable_path = None
-            for path in possible_paths:
-                if os.path.exists(path):
-                    executable_path = path
-                    print(f"   ✅ Usando ejecutable: {path}")
-                    break
-            
-            try:
-                browser = await p.chromium.launch(
-                    executable_path=executable_path,
-                    headless=False,
-                    args=[
-                        "--enable-features=TranslationAPI,PromptAPIForGeminiNano,OptimizationGuideOnDeviceModel",
-                        "--optimization-guide-on-device-model-params-override" 
-                    ] 
-                )
-            except Exception as e:
-                print(f"⚠️ Fallo lanzando navegador custom ('{e}'). Intentando default...")
-                browser = await p.chromium.launch(
-                    channel="chrome",
-                    headless=False,
-                    args=["--enable-features=TranslationAPI"]
-                )
-
-            page = await browser.new_page()
-            try:
-                await page.goto("chrome://newtab")
-            except:
-                pass
-            
-            total_batches = len(batches)
-            
-            for i, batch in enumerate(batches):
-                print(f"  Processing batch {i+1}/{total_batches} ({len(batch)} items)...")
-                
-                # Preparar texto unido: Reemplazamos saltos de línea internos por espacio para evitar confusión
-                # o usamos un token especial si es necesario. Para subtítulos, space suele ser seguro si es una sola frase.
-                # Pero si queremos multiline, usamos un placeholder.
-                
-                texts_to_translate = [b['original_text'].replace('\n', ' [BR] ') for b in batch]
-                joined_text = SEPARATOR.join(texts_to_translate)
-                
-                translated_joined = await self._translate_chunk_in_browser(page, joined_text)
-                
-                if translated_joined.startswith("ERROR"):
-                    raise Exception(f"Translation failed: {translated_joined}")
-                
-                # Separar resultados
-                results = translated_joined.split(SEPARATOR.strip())
-                
-                # Validación básica
-                if len(results) != len(batch):
-                    # Fallback: traducir uno por uno
-                    for block in batch:
-                        safe_text = block['original_text'].replace('\n', ' [BR] ')
-                        res = await self._translate_chunk_in_browser(page, safe_text)
-                        if res.startswith("ERROR"):
-                             raise Exception(f"Translation failed: {res}")
-                        # Case insensitive replacement for [BR]
-                        block['translated_text'] = re.sub(r'\s*\[br\]\s*', '\n', res, flags=re.IGNORECASE).strip()
-                else:
-                    # Asignar resultados
-                    for j, res in enumerate(results):
-                        # Limpieza y restauración de saltos de línea
-                        clean_res = re.sub(r'\s*\[br\]\s*', '\n', res, flags=re.IGNORECASE).strip()
-                        batch[j]['translated_text'] = clean_res
-
-            await browser.close()
+        total_batches = len(batches)
         
+        for i, batch in enumerate(batches):
+            print(f"  🤖 Processing batch {i+1}/{total_batches} ({len(batch)} items)...")
+            
+            # Preparar lista de textos
+            texts_to_translate = [b['original_text'].replace('\n', ' [BR] ') for b in batch]
+            
+            # Intentar batch
+            translated_list = await self._translate_batch(texts_to_translate, title=title)
+            
+            if translated_list and len(translated_list) == len(batch):
+                for j, res in enumerate(translated_list):
+                    # Limpiar y asignar
+                    clean_res = re.sub(r'\s*\[br\]\s*', '\n', res, flags=re.IGNORECASE).strip()
+                    batch[j]['translated_text'] = clean_res
+            else:
+                # Si falla el batch, hacemos fallback silencioso a original o reintento simple
+                # En este caso, como _translate_batch ya tiene fallback interno (devuelve original si falta linea),
+                # esto apenas debería ocurrir a menos que falle la llamada de red/ollama.
+                print(f"  ⚠️ Text Batch flawed. Retrying individually ({len(batch)} items)...")
+                for block in batch:
+                    safe_text = block['original_text'].replace('\n', ' [BR] ')
+                    res = await self._translate_single(safe_text, title=title)
+                    block['translated_text'] = re.sub(r'\s*\[br\]\s*', '\n', res, flags=re.IGNORECASE).strip()
+
         return self._reconstruct_srt(blocks)

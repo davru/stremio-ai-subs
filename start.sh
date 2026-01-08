@@ -18,6 +18,8 @@ source "$VENV_NAME/bin/activate"
 # 3. Instalar dependencias
 echo "⬇️  Instalando/Actualizando dependencias..."
 pip install -r requirements.txt
+echo "🎭 Instalando navegadores de Playwright..."
+playwright install chromium
 
 # 4. Verificar archivo .env
 if [ ! -f ".env" ]; then

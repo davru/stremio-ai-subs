@@ -7,6 +7,7 @@ import io
 import os
 from app.services.opensubtitles import OpenSubtitlesClient
 from app.services.translator import TranslatorService
+from app.services.imdb import IMDBService
 
 app = FastAPI()
 
@@ -15,6 +16,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 os_client = OpenSubtitlesClient()
 translator = TranslatorService()
+imdb_service = IMDBService()
 
 class SearchRequest(BaseModel):
     query: str
@@ -27,10 +29,23 @@ class ProcessRequest(BaseModel):
 async def read_root():
     return FileResponse('static/index.html')
 
-@app.get("/api/search")
-async def search_subtitles(query: str):
+@app.get("/api/search_media")
+async def search_media(query: str):
+    """Buscamos películas/series en IMDb (Endpoint sugerencias)"""
+    return imdb_service.search_content(query)
+
+@app.get("/api/search_subtitles")
+async def search_subtitles(imdb_id: str, kind: str = "movie"):
+    """Buscamos subtítulos en OpenSubtitles usando el ID de IMDb"""
     try:
-        results = os_client.search(query)
+        # Si es una serie, usar parent_imdb_id
+        is_series = kind.lower() in ['tv series', 'tv mini-series', 'series']
+        
+        if is_series:
+            results = os_client.search(parent_imdb_id=imdb_id)
+        else:
+            results = os_client.search(imdb_id=imdb_id)
+            
         # Simplificar respuesta para el frontend
         simplified = []
         for item in results:

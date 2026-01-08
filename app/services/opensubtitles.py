@@ -32,16 +32,25 @@ class OpenSubtitlesClient:
             print(f"Error login: {response.text}")
             return False
 
-    def search(self, query):
+    def search(self, imdb_id=None, parent_imdb_id=None, query=None):
         # El endpoint de búsqueda no requiere token de usuario obligatoriamente, solo API Key.
-        # Quitamos la llamada forzada a login() para permitir búsquedas sin login.
         
         params = {
-            "query": query,
             "languages": "en", 
             "order_by": "download_count", 
             "order_direction": "desc"
         }
+        
+        if parent_imdb_id:
+            # Para series (TV Shows), usamos parent_imdb_id con el ID de la serie
+            params["parent_imdb_id"] = int(parent_imdb_id.replace("tt", "")) if str(parent_imdb_id).startswith("tt") else parent_imdb_id
+        elif imdb_id:
+            # El usuario indica que se debe conservar el 'tt' para la búsqueda
+            params["imdb_id"] = imdb_id
+        elif query:
+            params["query"] = query
+        else:
+            return []
         
         try:
             response = requests.get(f"{BASE_URL}/subtitles", params=params, headers=self.headers)
@@ -51,6 +60,19 @@ class OpenSubtitlesClient:
             print(f"Error searching subtitles: {e}")
             if 'response' in locals():
                 print(f"Response: {response.text}")
+            return []
+
+    def search_features(self, query):
+        """
+        Busca metadatos de películas/series en OpenSubtitles (no subtítulos, solo info).
+        """
+        params = {"query": query}
+        try:
+            response = requests.get(f"{BASE_URL}/features", params=params, headers=self.headers)
+            response.raise_for_status()
+            return response.json().get("data", [])
+        except Exception as e:
+            print(f"Error searching features: {e}")
             return []
 
     def download_url(self, file_id):

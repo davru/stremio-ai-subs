@@ -20,32 +20,76 @@
         <h1>Traductor de Subtítulos (OpenSubtitles + AI)</h1>
         
         <div style="display: flex; gap: 10px;">
-            <input type="text" id="query" placeholder="Buscar película o serie (ej: The Mandalorian S01E01)...">
-            <button onclick="search()">Buscar</button>
+            <input type="text" id="query" placeholder="Buscar película o serie (ej: Breaking Bad)...">
+            <button onclick="searchMedia()">Buscar</button>
         </div>
 
-        <div id="loading" class="loading">Buscando...</div>
+        <div id="loading" class="loading">Buscando en IMDb...</div>
         <div id="processing" class="loading">Traduciendo con IA (esto puede tardar unos minutos)...</div>
 
-        <div id="results"></div>
+        <div id="media-results" style="display: flex; flex-wrap: wrap; gap: 20px; margin-top: 20px;"></div>
+        <br><hr/><br>
+        <h3>Subtítulos Disponibles</h3>
+        <div id="subtitle-results"></div>
     </div>
 
     <script>
-        async function search() {
+        async function searchMedia() {
             const query = document.getElementById('query').value;
             if (!query) return;
 
             document.getElementById('loading').style.display = 'block';
-            document.getElementById('results').innerHTML = '';
+            document.getElementById('loading').innerText = 'Buscando en IMDb...';
+            document.getElementById('media-results').innerHTML = '';
+            document.getElementById('subtitle-results').innerHTML = '';
 
             try {
-                const res = await fetch(`/api/search?query=${encodeURIComponent(query)}`);
+                const res = await fetch(`/api/search_media?query=${encodeURIComponent(query)}`);
                 const data = await res.json();
                 
                 document.getElementById('loading').style.display = 'none';
                 
                 if (data.length === 0) {
-                    document.getElementById('results').innerHTML = '<p>No se encontraron resultados.</p>';
+                    document.getElementById('media-results').innerHTML = '<p>No se encontraron películas/series.</p>';
+                    return;
+                }
+
+                data.forEach(item => {
+                    const div = document.createElement('div');
+                    div.style = 'border: 1px solid #ddd; padding: 10px; width: 150px; text-align: center; cursor: pointer; border-radius: 8px;';
+                    div.className = 'media-item';
+                    div.onclick = () => loadSubtitles(item.imdb_id, item.title, item.kind);
+                    
+                    const img = item.cover ? `<img src="${item.cover}" style="width: 100%; border-radius: 4px;">` : '<div style="height: 200px; background: #eee;">Sin imagen</div>';
+                    
+                    div.innerHTML = `
+                        ${img}
+                        <h4 style="margin: 10px 0 5px;">${item.title}</h4>
+                        <small>${item.year || 'N/A'} (${item.kind})</small>
+                    `;
+                    document.getElementById('media-results').appendChild(div);
+                });
+
+            } catch (error) {
+                console.error(error);
+                document.getElementById('loading').style.display = 'none';
+                alert('Error al buscar en IMDb');
+            }
+        }
+
+        async function loadSubtitles(imdbId, title, kind) {
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('loading').innerText = `Buscando subtítulos para: ${title}...`;
+            document.getElementById('subtitle-results').innerHTML = '';
+
+            try {
+                const res = await fetch(`/api/search_subtitles?imdb_id=${imdbId}&kind=${encodeURIComponent(kind)}`);
+                const data = await res.json();
+                
+                document.getElementById('loading').style.display = 'none';
+
+                if (data.length === 0) {
+                    document.getElementById('subtitle-results').innerHTML = '<p>No se encontraron subtítulos en inglés para este contenido.</p>';
                     return;
                 }
 
@@ -59,13 +103,16 @@
                         </div>
                         <button onclick="processSub('${item.file_id}', '${item.file_name}')">Traducir al Español</button>
                     `;
-                    document.getElementById('results').appendChild(div);
+                    document.getElementById('subtitle-results').appendChild(div);
                 });
+                
+                // Scroll hacia subtítulos
+                document.getElementById('subtitle-results').scrollIntoView({behavior: 'smooth'});
 
             } catch (error) {
                 console.error(error);
                 document.getElementById('loading').style.display = 'none';
-                alert('Error al buscar');
+                alert('Error al buscar subtítulos');
             }
         }
 

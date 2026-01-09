@@ -66,16 +66,26 @@ class TranslatorService:
         for i, text in enumerate(texts):
             input_formatted += f"ITEM_{i}: {text}\n"
 
-        context_instruction = f"Context: You are translating subtitles for the movie/series '{title}'." if title else "Context: Subtitle translation."
+        context_instruction = f"Context: Subtitles for '{title}'." if title else "Context: Subtitles."
 
-        prompt = (
-            f"Act as a professional translator from EN to ES (Spain). {context_instruction}\n"
-            "KEY INSTRUCTIONS:\n"
-            "1. Translate each line keeping the exact prefix 'ITEM_N: '.\n"
-            "2. DO NOT touch tags [BR], <i>, <b>, <u>, ♪, ♫.\n"
-            "3. DO NOT add chatter or introductions. Only the translated list.\n"
-            "4. Respect Spain Spanish (idiomatic).\n\n"
-            "TEXT TO TRANSLATE:\n"
+        system_prompt = (
+            "You are a professional subtitle translator. Your TASK is to translate the provided text list from ENGLISH to SPANISH (SPAIN).\n"
+            f"{context_instruction}\n"
+            "RULES:\n"
+            "1. You MUST translate every item to Spanish. Do not leave English text.\n"
+            "2. Keep the exact format 'ITEM_N: [Translation]'.\n"
+            "3. Preserve tags: [BR], <i>, <b>, ♫.\n"
+            "4. Example:\n"
+            "   Input:\n"
+            "     ITEM_0: Hello friend\n"
+            "     ITEM_1: How are you?\n"
+            "   Output:\n"
+            "     ITEM_0: Hola amigo\n"
+            "     ITEM_1: ¿Cómo estás?\n"
+        )
+        
+        user_prompt = (
+            "Translate this list to Spanish:\n\n"
             f"{input_formatted}"
         )
         
@@ -83,7 +93,10 @@ class TranslatorService:
              # We use format='' (plain text) because JSON fails a lot on small models
              response = await self.client.chat(
                 model=self.model_ollama, 
-                messages=[{'role': 'user', 'content': prompt}],
+                messages=[
+                    {'role': 'system', 'content': system_prompt},
+                    {'role': 'user', 'content': user_prompt}
+                ],
                 options={'temperature': 0.1, 'num_ctx': 4096} # Increase context window if possible
              )
              content = response['message']['content'].strip()
@@ -111,16 +124,27 @@ class TranslatorService:
              return None
 
     async def _translate_single(self, text, title=None):
-        context_instruction = f"Context: You are translating subtitles for '{title}'." if title else ""
-        prompt = (
-            f"Translate exactly this text to Spanish (Spain). {context_instruction}\n"
-            "Preserve [BR] tags.\n"
-            "Preserve tags <i>, <b>, <u> and symbols ♪, ♫, #.\n"
-            "Output ONLY the translation.\n\n"
+        context_instruction = f"Context: Subtitles for '{title}'." if title else ""
+        
+        system_prompt = (
+            "You are a professional translator. Translate the text from ENGLISH to SPANISH (SPAIN).\n"
+            "Output ONLY the translation, nothing else."
+        )
+        
+        user_prompt = (
+            f"{context_instruction}\n"
+            "Translate this text to Spanish:\n"
             f"{text}"
         )
+        
         try:
-            response = await self.client.chat(model=self.model_ollama, messages=[{'role': 'user', 'content': prompt}])
+            response = await self.client.chat(
+                model=self.model_ollama, 
+                messages=[
+                    {'role': 'system', 'content': system_prompt},
+                    {'role': 'user', 'content': user_prompt}
+                ]
+            )
             return response['message']['content'].strip()
         except:
             return text 
@@ -139,8 +163,11 @@ class TranslatorService:
             
             # Robust heuristic: If we find a single number on a line...
             # AND the NEXT line contains '-->', then it is a block header.
+            # Handle potential BOM or whitespace issues in 'line'
+            clean_line = line.strip().replace('\ufeff', '')
+            
             is_header = False
-            if line.isdigit() and (i + 1 < len(lines)):
+            if clean_line.isdigit() and (i + 1 < len(lines)):
                 if '-->' in lines[i+1]:
                     is_header = True
             
@@ -154,7 +181,7 @@ class TranslatorService:
                 
                 # Start new block
                 current_block = {
-                    'index': line,
+                    'index': clean_line,
                     'time': lines[i+1],
                     'text_lines': []
                 }
@@ -213,6 +240,15 @@ class TranslatorService:
         blocks = self._parse_srt(srt_content)
         print(f"🧩 Parsed {len(blocks)} subtitle blocks.")
         
+        # Setup Log File
+        safe_title = re.sub(r'[^\w\s-]', '', title).strip().replace(' ', '_') if title else "subtitle"
+        log_filename = f"translation_{safe_title}_{int(time.time())}.log"
+        print(f"📝 Live logging to: {log_filename}")
+        
+        with open(log_filename, "w", encoding="utf-8") as f:
+            f.write(f"Subtitle Translation Log\nTitle: {title}\nDate: {time.ctime()}\n")
+            f.write("="*50 + "\n\n")
+
         # Group by item count
         # Reduce batch size for small models (Llama 3.2 3B)
         # Batch of 10 is a good speed/stability balance 
@@ -224,28 +260,66 @@ class TranslatorService:
         
         total_batches = len(batches)
         
-        for i, batch in enumerate(batches):
-            print(f"  🤖 Processing batch {i+1}/{total_batches} ({len(batch)} items)...")
-            
-            # Prepare text list
-            texts_to_translate = [b['original_text'].replace('\n', ' [BR] ') for b in batch]
-            
-            # Try batch
-            translated_list = await self._translate_batch(texts_to_translate, title=title)
-            
-            if translated_list and len(translated_list) == len(batch):
-                for j, res in enumerate(translated_list):
-                    # Clean and assign
-                    clean_res = re.sub(r'\s*\[br\]\s*', '\n', res, flags=re.IGNORECASE).strip()
-                    batch[j]['translated_text'] = clean_res
-            else:
-                # If batch fails, silent fallback to original or simple retry
-                # In this case, since _translate_batch already has internal fallback (returns original if line missing),
-                # this should barely happen unless network/ollama call fails.
-                print(f"  ⚠️ Text Batch flawed. Retrying individually ({len(batch)} items)...")
-                for block in batch:
-                    safe_text = block['original_text'].replace('\n', ' [BR] ')
-                    res = await self._translate_single(safe_text, title=title)
-                    block['translated_text'] = re.sub(r'\s*\[br\]\s*', '\n', res, flags=re.IGNORECASE).strip()
+        print(f"🚀 Starting translation with 4 concurrent workers...")
+        semaphore = asyncio.Semaphore(4)
+
+        async def process_batch(i, batch):
+            async with semaphore:
+                print(f"  🔄 [Batch {i+1}/{total_batches}] Processing {len(batch)} items...")
+                start_time = time.time()
+                
+                try:
+                    # Prepare text list
+                    texts_to_translate = [b['original_text'].replace('\n', ' [BR] ') for b in batch]
+                    
+                    # Try batch
+                    translated_list = await self._translate_batch(texts_to_translate, title=title)
+                    
+                    batch_success = False
+                    if translated_list and len(translated_list) == len(batch):
+                        batch_success = True
+                        for j, res in enumerate(translated_list):
+                            clean_res = re.sub(r'\s*\[br\]\s*', '\n', res, flags=re.IGNORECASE).strip()
+                            if clean_res:
+                                batch[j]['translated_text'] = clean_res
+                            else:
+                                batch_success = False
+                                break
+                    
+                    if not batch_success:
+                        print(f"  ⚠️ [Batch {i+1}] Validation failed. Retrying items individually...")
+                        for block in batch:
+                            safe_text = block['original_text'].replace('\n', ' [BR] ')
+                            try:
+                                await asyncio.sleep(0.2) 
+                                res = await self._translate_single(safe_text, title=title)
+                                block['translated_text'] = re.sub(r'\s*\[br\]\s*', '\n', res, flags=re.IGNORECASE).strip()
+                            except Exception as e_single:
+                                block['translated_text'] = block['original_text']
+                    
+                    elapsed = time.time() - start_time
+                    print(f"  ✅ [Batch {i+1}] Finished in {elapsed:.1f}s")
+                    
+                    # LOGGING
+                    try:
+                        with open(log_filename, "a", encoding="utf-8") as f:
+                            log_chunk = f"\n--- Batch {i+1} ---\n"
+                            for b in batch:
+                                t_text = b.get('translated_text', 'N/A')
+                                log_chunk += f"[{b['index']}] {b['time']} => {t_text}\n"
+                            f.write(log_chunk)
+                    except Exception as log_err:
+                        print(f"  ⚠️ Log write error: {log_err}")
+
+                except Exception as e:
+                    print(f"  ❌ [Batch {i+1}] Error: {e}")
+                    for block in batch:
+                        if 'translated_text' not in block:
+                             block['translated_text'] = block['original_text']
+
+        # Run tasks concurrently
+        tasks = [process_batch(i, batch) for i, batch in enumerate(batches)]
+        # Use return_exceptions=True to ensure one crash doesn't stop others
+        await asyncio.gather(*tasks, return_exceptions=True)
 
         return self._reconstruct_srt(blocks)

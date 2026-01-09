@@ -1,6 +1,7 @@
 import os
 import requests
 from dotenv import load_dotenv
+from app.utils.logger import log
 
 load_dotenv()
 
@@ -29,7 +30,7 @@ class OpenSubtitlesClient:
             self.headers["Authorization"] = f"Bearer {self.token}"
             return True
         else:
-            print(f"Login error: {response.text}")
+            log.error(f"Login error: {response.text}")
             return False
 
     def search(self, imdb_id=None, parent_imdb_id=None, query=None):
@@ -57,9 +58,9 @@ class OpenSubtitlesClient:
             response.raise_for_status()
             return response.json().get("data", [])
         except Exception as e:
-            print(f"Error searching subtitles: {e}")
+            log.error(f"Error searching subtitles: {e}")
             if 'response' in locals():
-                print(f"Response: {response.text}")
+                log.debug(f"Response: {response.text}")
             return []
 
     def search_features(self, query):
@@ -72,7 +73,7 @@ class OpenSubtitlesClient:
             response.raise_for_status()
             return response.json().get("data", [])
         except Exception as e:
-            print(f"Error searching features: {e}")
+            log.error(f"Error searching features: {e}")
             return []
 
     def download_url(self, file_id):

@@ -1,6 +1,7 @@
 import os
 import time
 from playwright.async_api import async_playwright
+from app.utils.logger import log
 
 STREMIO_EMAIL = os.getenv("STREMIO_EMAIL")
 STREMIO_PASSWORD = os.getenv("STREMIO_PASSWORD")
@@ -8,10 +9,10 @@ STREMIO_PASSWORD = os.getenv("STREMIO_PASSWORD")
 class StremioUploader:
     async def upload_subtitle(self, file_path, imdb_id, content_type="movie", season=None, episode=None):
         if not STREMIO_EMAIL or not STREMIO_PASSWORD:
-            print("❌ Error: STREMIO_EMAIL or STREMIO_PASSWORD configuration missing")
+            log.error("STREMIO_EMAIL or STREMIO_PASSWORD configuration missing")
             return False
 
-        print(f"🚀 Starting upload for {imdb_id} (Type: {content_type}, S:{season} E:{episode})...")
+        log.upload(f"Starting upload for {imdb_id} (Type: {content_type}, S:{season} E:{episode})")
         
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True) # Headless by default
@@ -20,7 +21,7 @@ class StremioUploader:
 
             try:
                 # 1. Login
-                print("🔑 Logging in...")
+                log.auth("Logging in")
                 await page.goto("https://stremio-community-subtitles.top/login")
                 
                 # Try filling login form
@@ -35,12 +36,12 @@ class StremioUploader:
                 await page.wait_for_load_state("networkidle")
                 
                 if "/login" in page.url:
-                    print("⚠️ Warning: URL still contains '/login'. Check credentials.")
+                    log.warning("URL still contains '/login'. Check credentials")
                 
-                print(f"✅ Login completed (Current URL: {page.url})")
+                log.success(f"Login completed (Current URL: {page.url})")
 
                 # 2. Go to Upload
-                print("📂 Navigating to upload page...")
+                log.web("Navigating to upload page")
                 await page.goto("https://stremio-community-subtitles.top/content/upload")
                 
                 # 3. Fill upload form
@@ -52,11 +53,11 @@ class StremioUploader:
                 # If site asks for "tt12345", ensure we have 'tt'.
                 full_imdb_id = imdb_id if str(imdb_id).startswith("tt") else f"tt{imdb_id}"
                 
-                print(f"📝 Filling ID: {full_imdb_id}")
+                log.info(f"Filling ID: {full_imdb_id}", "📝")
                 await page.fill('input[name*="content_id"], input[id*="content_id"]', full_imdb_id)
 
                 # Content type
-                print("🗣 Selecting content type...")
+                log.info("Selecting content type", "🗣")
                 select = await page.query_selector('select#content_type')
                 if select:
                     # Simple mapping: if "episode" or "series", search Episode or Series
@@ -72,32 +73,38 @@ class StremioUploader:
 
                 # Fill Season and Episode if applicable
                 if season and episode:
-                    print(f"🔢 Filling Season {season} and Episode {episode}...")
+                    log.info(f"Filling Season {season} and Episode {episode}", "🔢")
                     # Attempt 1: Suggested IDs/Names
                     await page.fill('input[name="season_number"], input[id="season_number"]', str(season))
                     await page.fill('input[name="episode_number"], input[id="episode_number"]', str(episode))
                 
                 # Language
-                # Assuming a select. Selecting 'Spanish' or 'es' by label or value.
-                # Sometimes it's a select dropdown
-                print("🗣 Selecting language...")
-                # Try selecting option containing "Spanish" or "Español"
+                # Get target language code from environment (default: spa for Spanish)
+                target_lang_code = os.getenv("TARGET_LANGUAGE_CODE", "spa")
+                log.info(f"Selecting language: {target_lang_code}", "🗣")
+                
                 select = await page.query_selector('select#language')
                 if select:
-                    options = await select.query_selector_all('option')
-                    for opt in options:
-                        text = await opt.text_content()
-                        if "spa" in text.lower():
+                    # Try to select by value directly first
+                    try:
+                        await select.select_option(target_lang_code)
+                        log.success(f"Selected language code: {target_lang_code}")
+                    except:
+                        # Fallback: search through options if direct selection fails
+                        options = await select.query_selector_all('option')
+                        for opt in options:
                             val = await opt.get_attribute('value')
-                            await select.select_option(val)
-                            break
+                            if val and target_lang_code.lower() in val.lower():
+                                await select.select_option(val)
+                                log.success(f"Selected language: {val}")
+                                break
                 
                 # File
-                print(f"📄 Attaching file: {file_path}")
+                log.file(f"Attaching file: {file_path}")
                 await page.set_input_files('input#subtitle_file', file_path)
                 
                 # 4. Send
-                print("🚀 Sending form...")
+                log.upload("Sending form")
                 # Search for "Upload", "Save", "Submit" button
                 await page.click('button:has-text("Upload"), button:has-text("Save"), input[type="submit"]')
                 
@@ -105,16 +112,16 @@ class StremioUploader:
                 # Wait a bit or search for success message
                 await page.wait_for_timeout(5000)
                 
-                print("✅ Subida finalizada.")
+                log.success("Upload completed")
                 return True
 
             except Exception as e:
-                print(f"❌ Error during automatic upload: {e}")
+                log.error(f"Error during automatic upload: {e}")
                 # Take screenshot on error for debugging
                 os.makedirs("errors", exist_ok=True)
                 error_filename = f"errors/upload_error_{int(time.time())}.png"
                 await page.screenshot(path=error_filename)
-                print(f"📸 Error capture saved to {error_filename}")
+                log.info(f"Error capture saved to {error_filename}", "📸")
                 return False
             finally:
                 await browser.close()

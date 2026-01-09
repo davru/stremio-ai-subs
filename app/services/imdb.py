@@ -1,4 +1,5 @@
 import requests
+from app.utils.logger import log
 
 class IMDBService:
     def __init__(self):
@@ -53,5 +54,5 @@ class IMDBService:
             return results
             
         except Exception as e:
-            print(f"Error searching on IMDb (Suggestion API): {e}")
+            log.error(f"Error searching on IMDb (Suggestion API): {e}")
             return []

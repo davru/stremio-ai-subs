@@ -1,61 +1,21 @@
 import re
 import os
-import google.generativeai as genai
 from ollama import AsyncClient
 import asyncio
 import time
+from app.utils.logger import log
 
 class TranslatorService:
     def __init__(self):
-        # Configure Gemini if API Key is present
-        self.gemini_key = os.getenv("GEMINI_API_KEY")
-        if self.gemini_key:
-            genai.configure(api_key=self.gemini_key)
-            # Use Gemini 2.0 Flash (Available in 2026, faster and more capable)
-            self.model_name = "gemini-2.0-flash"
-            self.use_gemini = True
-            print(f"✨ Using Google Gemini API ({self.model_name})")
-            
-            # Initialize Ollama as fallback too
-            self.client = AsyncClient()
-            self.model_ollama = "llama3.2:latest"
-        else:
-            self.use_gemini = False
-            self.model_ollama = "llama3.2:latest"
-            self.client = AsyncClient()
-            print(f"🦙 Using Local Ollama ({self.model_ollama})")
-
-    async def _translate_gemini_full_content(self, srt_content, title=None):
-        """Translates ALL content at once using Gemini's massive context"""
-        model = genai.GenerativeModel(self.model_name)
+        # Get target language from environment
+        self.target_language = os.getenv("TARGET_LANGUAGE", "Spanish")
+        self.target_language_code = os.getenv("TARGET_LANGUAGE_CODE", "spa")
         
-        context_instruction = f"Context: You are translating subtitles for the movie/series '{title}'." if title else "Context: You are translating subtitles for a movie/series."
-        
-        prompt = (
-            "You are a professional movie and series translator. Your task is to translate the following SRT content from English to Spanish (Spain).\n"
-            f"{context_instruction}\n"
-            "STRICT RULES:\n"
-            "1. Output valid SRT format ONLY. Do not wrap in markdown code blocks.\n"
-            "2. Preserve all timestamps and indices exactly.\n"
-            "3. Translate text content to natural, idiomatic Spanish (Spain).\n"
-            "4. KEEP keys/tags: [BR], <i>, <b>, <u>, </i>, </b>, </u>, ♪, ♫, #, and any other special symbol.\n"
-            "5. Do NOT translate speaker names if they appear in uppercase (e.g. 'JOHN:').\n"
-            "6. Provide the FULL translation for the input provided.\n\n"
-            "INPUT SRT CONTENT:\n"
-            f"{srt_content}"
-        )
-        
-        try:
-             # Gemini 1.5 Flash supports ~1M tokens, so we can send the whole file usually.
-             # However, for huge files, we might occasionally split, but SRTs are small (50k chars).
-             
-             # Run in executor because genai is sync (mostly)
-             loop = asyncio.get_event_loop()
-             response = await loop.run_in_executor(None, lambda: model.generate_content(prompt))
-             return response.text.replace("```srt", "").replace("```", "").strip()
-        except Exception as e:
-            print(f"❌ Gemini Error: {e}")
-            raise e
+        # Configure Ollama
+        self.model_ollama = os.getenv("OLLAMA_MODEL", "llama3.2:latest")
+        self.client = AsyncClient()
+        log.ai(f"Using Local Ollama ({self.model_ollama})")
+        log.translate(f"Target language: {self.target_language} ({self.target_language_code})")
 
     async def _translate_batch(self, texts, title=None):
         # STRATEGY: Numbered list (More robust than JSON for small models like Llama 3 3B)
@@ -68,10 +28,10 @@ class TranslatorService:
         context_instruction = f"Context: Subtitles for '{title}'." if title else "Context: Subtitles."
 
         system_prompt = (
-            "You are a professional subtitle translator. Your TASK is to translate the provided text list from ENGLISH to SPANISH (SPAIN).\n"
+            f"You are a professional subtitle translator. Your TASK is to translate the provided text list from ENGLISH to {self.target_language.upper()}.\n"
             f"{context_instruction}\n"
             "RULES:\n"
-            "1. You MUST translate every item to Spanish. Do not leave English text.\n"
+            f"1. You MUST translate every item to {self.target_language}. Do not leave English text.\n"
             "2. Keep the exact format 'ITEM_N: [Translation]'.\n"
             "3. Preserve tags: [BR], <i>, <b>, ♫.\n"
             "4. Example:\n"
@@ -79,12 +39,12 @@ class TranslatorService:
             "     ITEM_0: Hello friend\n"
             "     ITEM_1: How are you?\n"
             "   Output:\n"
-            "     ITEM_0: Hola amigo\n"
-            "     ITEM_1: ¿Cómo estás?\n"
+            "     ITEM_0: [Translation in target language ({{self.target_language}})]\n"
+            "     ITEM_1: [Translation in target language ({{self.target_language}})]\n"
         )
         
         user_prompt = (
-            "Translate this list to Spanish:\n\n"
+            f"Translate this list to {self.target_language}:\n\n"
             f"{input_formatted}"
         )
         
@@ -119,20 +79,20 @@ class TranslatorService:
              return result_list
 
         except Exception as e:
-             print(f"❌ Ollama batch error: {e}")
+             log.error(f"Ollama batch error: {e}")
              return None
 
     async def _translate_single(self, text, title=None):
         context_instruction = f"Context: Subtitles for '{title}'." if title else ""
         
         system_prompt = (
-            "You are a professional translator. Translate the text from ENGLISH to SPANISH (SPAIN).\n"
+            f"You are a professional translator. Translate the text from ENGLISH to {self.target_language.upper()}.\n"
             "Output ONLY the translation, nothing else."
         )
         
         user_prompt = (
             f"{context_instruction}\n"
-            "Translate this text to Spanish:\n"
+            f"Translate this text to {self.target_language}:\n"
             f"{text}"
         )
         
@@ -212,38 +172,21 @@ class TranslatorService:
         return "\n\n".join(output)
 
     async def translate_srt(self, srt_content, title=None):
-        if self.use_gemini:
-             print("⚡️ Fast Translation with Gemini Flash...")
-             # Split into chunks if MASSIVE (>800kb), but normal SRTs fit easily.
-             # Gemini Flash supports ~700,000 words. An SRT has ~5,000.
-             # send directly.
-             try:
-                translated = await self._translate_gemini_full_content(srt_content, title)
-                return translated
-             except Exception as e:
-                print(f"⚠️ Gemini request failed: {e}. Falling back to Ollama if available...")
-                if not hasattr(self, 'client') or not self.client: 
-                     raise e
-
         # Check Ollama availability
         try:
-            # A small call to wake up the model or check connection
-            if not self.use_gemini:
-                # Only check explicitly if not coming from a fallback
-                # in fallback we assume we will instantiate/use the client
-                await self.client.show(self.model_ollama)
+            await self.client.show(self.model_ollama)
         except Exception as e:
-            print(f"❌ Error connecting to Ollama ({self.model_ollama}). Ensure Ollama is running.")
+            log.error(f"Error connecting to Ollama ({self.model_ollama}). Ensure Ollama is running.")
             raise e
 
         blocks = self._parse_srt(srt_content)
-        print(f"🧩 Parsed {len(blocks)} subtitle blocks.")
+        log.info(f"Parsed {len(blocks)} subtitle blocks", "🧩")
         
         # Setup Log File in logs/ folder
         os.makedirs("logs", exist_ok=True)
         safe_title = re.sub(r'[^\w\s-]', '', title).strip().replace(' ', '_') if title else "subtitle"
         log_filename = f"logs/translation_{safe_title}_{int(time.time())}.log"
-        print(f"📝 Live logging to: {log_filename}")
+        log.file(f"Live logging to: {log_filename}")
         
         with open(log_filename, "w", encoding="utf-8") as f:
             f.write(f"Subtitle Translation Log\nTitle: {title}\nDate: {time.ctime()}\n")
@@ -256,16 +199,16 @@ class TranslatorService:
         
         batches = [blocks[i:i + BATCH_SIZE] for i in range(0, len(blocks), BATCH_SIZE)]
 
-        print(f"📦 Created {len(batches)} batches for translation via Ollama ({self.model_ollama}).")
+        log.batch(f"Created {len(batches)} batches for translation via Ollama ({self.model_ollama})")
         
         total_batches = len(batches)
         
-        print(f"🚀 Starting translation with 4 concurrent workers...")
+        log.process(f"Starting translation with 4 concurrent workers", "🚀")
         semaphore = asyncio.Semaphore(4)
 
         async def process_batch(i, batch):
             async with semaphore:
-                print(f"  🔄 [Batch {i+1}/{total_batches}] Processing {len(batch)} items...")
+                log.batch(f"Processing {len(batch)} items", i+1, total_batches)
                 start_time = time.time()
                 
                 try:
@@ -287,7 +230,7 @@ class TranslatorService:
                                 break
                     
                     if not batch_success:
-                        print(f"  ⚠️ [Batch {i+1}] Validation failed. Retrying items individually...")
+                        log.warning(f"[Batch {i+1}] Validation failed. Retrying items individually")
                         for block in batch:
                             safe_text = block['original_text'].replace('\n', ' [BR] ')
                             try:
@@ -298,7 +241,7 @@ class TranslatorService:
                                 block['translated_text'] = block['original_text']
                     
                     elapsed = time.time() - start_time
-                    print(f"  ✅ [Batch {i+1}] Finished in {elapsed:.1f}s")
+                    log.success(f"[Batch {i+1}] Finished in {elapsed:.1f}s")
                     
                     # LOGGING
                     try:
@@ -309,10 +252,10 @@ class TranslatorService:
                                 log_chunk += f"[{b['index']}] {b['time']} => {t_text}\n"
                             f.write(log_chunk)
                     except Exception as log_err:
-                        print(f"  ⚠️ Log write error: {log_err}")
+                        log.warning(f"Log write error: {log_err}")
 
                 except Exception as e:
-                    print(f"  ❌ [Batch {i+1}] Error: {e}")
+                    log.error(f"[Batch {i+1}] Error: {e}")
                     for block in batch:
                         if 'translated_text' not in block:
                              block['translated_text'] = block['original_text']

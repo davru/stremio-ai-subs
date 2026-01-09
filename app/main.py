@@ -8,11 +8,12 @@ from app.services.opensubtitles import OpenSubtitlesClient
 from app.services.translator import TranslatorService
 from app.services.imdb import IMDBService
 from app.services.uploader import StremioUploader
+from app.utils.logger import log
 
 app = FastAPI()
 
 # Serve static files (frontend)
-app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/static", StaticFiles(directory="static", html=True), name="static")
 # Temporary directory
 os.makedirs("temp", exist_ok=True)
 
@@ -39,15 +40,15 @@ def cleanup_file(path: str):
         if os.path.exists(path):
             os.remove(path)
     except Exception as e:
-        print(f"Error deleting temp: {e}")
+        log.error(f"Error deleting temp: {e}")
 
 async def run_upload_task(file_path: str, imdb_id: str, content_type: str = "movie", season: int = None, episode: int = None):
     if imdb_id:
         success = await uploader.upload_subtitle(file_path, imdb_id, content_type, season, episode)
         if success:
-            print("🎉 Upload completed successfully.")
+            log.success("Upload completed successfully", "🎉")
         else:
-            print("⚠️ Upload failed.")
+            log.warning("Upload failed")
     # Cleanup file after attempt to upload
     cleanup_file(file_path)
 
@@ -119,17 +120,18 @@ async def process_subtitle(request: ProcessRequest, background_tasks: Background
             raise HTTPException(status_code=404, detail="Could not get download link")
         
         # 2. Download original SRT content
-        print(f"Downloading from {download_link}...")
+        log.download(f"Downloading from {download_link}")
         srt_response = requests.get(download_link)
         srt_content = srt_response.text
         
         # 3. Translate
-        print(f"Translating content for: {request.title or 'Unknown'}...")
+        log.translate(f"Translating content for: {request.title or 'Unknown'}")
         translated_content = await translator.translate_srt(srt_content, title=request.title)
         
         # 4. Save file temporarily for upload
         # Use SRT_NAMING_FORMAT from environment or fallback to default
         naming_format = os.getenv("SRT_NAMING_FORMAT", "{language}_{title}_{year}[{author}].srt")
+        target_lang_code = os.getenv("TARGET_LANGUAGE_CODE", "spa").upper()
         
         if request.title:
             # Clean title: remove special chars and replace spaces with dots
@@ -139,13 +141,13 @@ async def process_subtitle(request: ProcessRequest, background_tasks: Background
             
             # Apply naming format
             new_filename = naming_format.format(
-                language="ES",
+                language=target_lang_code,
                 title=safe_title,
                 year=safe_year,
                 author="davru.dev"
             )
         else:
-            new_filename = f"ES_{request.file_name}"
+            new_filename = f"{target_lang_code}_{request.file_name}"
 
         if not new_filename.lower().endswith('.srt'):
             new_filename += '.srt'
@@ -155,9 +157,9 @@ async def process_subtitle(request: ProcessRequest, background_tasks: Background
             f.write(translated_content)
 
         # 5. Schedule background upload
-        print(request)
+        log.debug(str(request))
         if request.imdb_id:
-            print(f"📅 Scheduling automatic upload for: {request.imdb_id} (S{request.season_number}E{request.episode_number})")
+            log.info(f"Scheduling automatic upload for: {request.imdb_id} (S{request.season_number}E{request.episode_number})", "📅")
             background_tasks.add_task(
                 run_upload_task, 
                 temp_path, 
@@ -167,7 +169,7 @@ async def process_subtitle(request: ProcessRequest, background_tasks: Background
                 request.episode_number
             )
         else:
-            print("⚠️ No IMDb ID, skipping automatic upload.")
+            log.warning("No IMDb ID, skipping automatic upload")
         
         # 6. Respond to user
         if request.imdb_id:
@@ -179,5 +181,5 @@ async def process_subtitle(request: ProcessRequest, background_tasks: Background
             return {"status": "warning", "message": "Translation completed, but no IMDb ID was provided for upload."}
 
     except Exception as e:
-        print(f"Error processing: {e}")
+        log.error(f"Error processing: {e}")
         raise HTTPException(status_code=500, detail=str(e))

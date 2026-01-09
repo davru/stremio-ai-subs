@@ -1,5 +1,4 @@
 import re
-import ollama
 import os
 import google.generativeai as genai
 from ollama import AsyncClient
@@ -240,9 +239,10 @@ class TranslatorService:
         blocks = self._parse_srt(srt_content)
         print(f"🧩 Parsed {len(blocks)} subtitle blocks.")
         
-        # Setup Log File
+        # Setup Log File in logs/ folder
+        os.makedirs("logs", exist_ok=True)
         safe_title = re.sub(r'[^\w\s-]', '', title).strip().replace(' ', '_') if title else "subtitle"
-        log_filename = f"translation_{safe_title}_{int(time.time())}.log"
+        log_filename = f"logs/translation_{safe_title}_{int(time.time())}.log"
         print(f"📝 Live logging to: {log_filename}")
         
         with open(log_filename, "w", encoding="utf-8") as f:

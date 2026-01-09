@@ -14,7 +14,7 @@ class OpenSubtitlesClient:
         self.headers = {
             "Api-Key": API_KEY,
             "Content-Type": "application/json",
-            "User-Agent": "TemporaryUserAgent" # Para desarrollo/pruebas
+            "User-Agent": "TemporaryUserAgent" # For development/testing
         }
         self.token = None
 

@@ -3,9 +3,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 import requests
-import io
 import os
-import shutil
 from app.services.opensubtitles import OpenSubtitlesClient
 from app.services.translator import TranslatorService
 from app.services.imdb import IMDBService
@@ -115,29 +113,37 @@ async def search_subtitles(imdb_id: str, kind: str = "movie"):
 @app.post("/api/process")
 async def process_subtitle(request: ProcessRequest, background_tasks: BackgroundTasks):
     try:
-        # 1. Obtener link de descarga
+        # 1. Get download link
         download_link = os_client.download_url(request.file_id)
         if not download_link:
-            raise HTTPException(status_code=404, detail="No se pudo obtener el link de descarga")
+            raise HTTPException(status_code=404, detail="Could not get download link")
         
-        # 2. Descargar contenido SRT original
-        print(f"Descargando desde {download_link}...")
+        # 2. Download original SRT content
+        print(f"Downloading from {download_link}...")
         srt_response = requests.get(download_link)
         srt_content = srt_response.text
         
-        # 3. Traducir
-        print(f"Traduciendo contenido para: {request.title or 'Unknown'}...")
+        # 3. Translate
+        print(f"Translating content for: {request.title or 'Unknown'}...")
         translated_content = await translator.translate_srt(srt_content, title=request.title)
         
-        # 4. Guardar archivo temporalmente para subirlo
+        # 4. Save file temporarily for upload
+        # Use SRT_NAMING_FORMAT from environment or fallback to default
+        naming_format = os.getenv("SRT_NAMING_FORMAT", "{language}_{title}_{year}[{author}].srt")
+        
         if request.title:
-            # Personalización: ES + Titulo + Año + davru.dev
-            # Limpiamos el título de caracteres raros y reemplazamos espacios por puntos
+            # Clean title: remove special chars and replace spaces with dots
             safe_title = "".join([c for c in request.title if c.isalnum() or c in " ._-"])
             safe_title = safe_title.strip().replace(" ", ".")
-            safe_year = f"_{request.year}" if request.year else ""
+            safe_year = str(request.year) if request.year else ""
             
-            new_filename = f"ES_{safe_title}{safe_year}[davru.dev].srt"
+            # Apply naming format
+            new_filename = naming_format.format(
+                language="ES",
+                title=safe_title,
+                year=safe_year,
+                author="davru.dev"
+            )
         else:
             new_filename = f"ES_{request.file_name}"
 
@@ -148,10 +154,10 @@ async def process_subtitle(request: ProcessRequest, background_tasks: Background
         with open(temp_path, "w", encoding="utf-8") as f:
             f.write(translated_content)
 
-        # 5. Programar subida en segundo plano
+        # 5. Schedule background upload
         print(request)
         if request.imdb_id:
-            print(f"📅 Programando subida automática para: {request.imdb_id} (S{request.season_number}E{request.episode_number})")
+            print(f"📅 Scheduling automatic upload for: {request.imdb_id} (S{request.season_number}E{request.episode_number})")
             background_tasks.add_task(
                 run_upload_task, 
                 temp_path, 
@@ -161,17 +167,17 @@ async def process_subtitle(request: ProcessRequest, background_tasks: Background
                 request.episode_number
             )
         else:
-            print("⚠️ No hay IMDb ID, se omite la subida automática.")
+            print("⚠️ No IMDb ID, skipping automatic upload.")
         
-        # 6. Responder al usuario
+        # 6. Respond to user
         if request.imdb_id:
-            return {"status": "success", "message": "Traducción completada. La subida a Stremio se está procesando en segundo plano."}
+            return {"status": "success", "message": "Translation completed. Upload to Stremio is being processed in the background."}
         else:
-            # Si por alguna razón no hay ID, indicamos que se generó pero no se subió (aunque el flujo actual siempre pide ID)
-            # En este caso, limpiamos el archivo ya que el usuario no lo descargará
+            # If for some reason there's no ID, indicate it was generated but not uploaded (though current flow always asks for ID)
+            # In this case, clean up the file since the user won't download it
             background_tasks.add_task(cleanup_file, temp_path)
-            return {"status": "warning", "message": "Traducción completada, pero no se proporcionó IMDb ID para subirlo."}
+            return {"status": "warning", "message": "Translation completed, but no IMDb ID was provided for upload."}
 
     except Exception as e:
-        print(f"Error procesando: {e}")
+        print(f"Error processing: {e}")
         raise HTTPException(status_code=500, detail=str(e))

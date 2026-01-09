@@ -1,5 +1,5 @@
 import os
-import asyncio
+import time
 from playwright.async_api import async_playwright
 
 STREMIO_EMAIL = os.getenv("STREMIO_EMAIL")
@@ -98,21 +98,23 @@ class StremioUploader:
                 
                 # 4. Send
                 print("🚀 Sending form...")
-                # Buscar botón "Upload", "Save", "Submit"
+                # Search for "Upload", "Save", "Submit" button
                 await page.click('button:has-text("Upload"), button:has-text("Save"), input[type="submit"]')
                 
-                # Esperar confirmación
-                # Esperamos un poco o buscamos mensaje de éxito
+                # Wait for confirmation
+                # Wait a bit or search for success message
                 await page.wait_for_timeout(5000)
                 
                 print("✅ Subida finalizada.")
                 return True
 
             except Exception as e:
-                print(f"❌ Error durante la subida automática: {e}")
-                # Tomar screenshot en caso de error para debug
-                await page.screenshot(path="error_upload.png")
-                print("📸 Captura de error guardada en error_upload.png")
+                print(f"❌ Error during automatic upload: {e}")
+                # Take screenshot on error for debugging
+                os.makedirs("errors", exist_ok=True)
+                error_filename = f"errors/upload_error_{int(time.time())}.png"
+                await page.screenshot(path=error_filename)
+                print(f"📸 Error capture saved to {error_filename}")
                 return False
             finally:
                 await browser.close()

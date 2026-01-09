@@ -20,7 +20,7 @@ class OpenSubtitlesClient:
 
     def login(self):
         if not USERNAME or not PASSWORD:
-            raise Exception("Credenciales de OpenSubtitles no configuradas")
+            raise Exception("OpenSubtitles credentials not configured")
             
         payload = {"username": USERNAME, "password": PASSWORD}
         response = requests.post(f"{BASE_URL}/login", json=payload, headers=self.headers)
@@ -29,11 +29,11 @@ class OpenSubtitlesClient:
             self.headers["Authorization"] = f"Bearer {self.token}"
             return True
         else:
-            print(f"Error login: {response.text}")
+            print(f"Login error: {response.text}")
             return False
 
     def search(self, imdb_id=None, parent_imdb_id=None, query=None):
-        # El endpoint de búsqueda no requiere token de usuario obligatoriamente, solo API Key.
+        # Search endpoint does not strictly require user token, only API Key.
         
         params = {
             "languages": "en", 
@@ -42,10 +42,10 @@ class OpenSubtitlesClient:
         }
         
         if parent_imdb_id:
-            # Para series (TV Shows), usamos parent_imdb_id con el ID de la serie
+            # For series (TV Shows), use parent_imdb_id with series ID
             params["parent_imdb_id"] = int(parent_imdb_id.replace("tt", "")) if str(parent_imdb_id).startswith("tt") else parent_imdb_id
         elif imdb_id:
-            # El usuario indica que se debe conservar el 'tt' para la búsqueda
+            # User indicates 'tt' should be kept for search
             params["imdb_id"] = imdb_id
         elif query:
             params["query"] = query
@@ -64,7 +64,7 @@ class OpenSubtitlesClient:
 
     def search_features(self, query):
         """
-        Busca metadatos de películas/series en OpenSubtitles (no subtítulos, solo info).
+        Search metadata for movies/series on OpenSubtitles (not subtitles, just info).
         """
         params = {"query": query}
         try:
@@ -85,7 +85,7 @@ class OpenSubtitlesClient:
             return response.json().get("link")
         return None
 
-    # Nota: La subida es compleja y requiere hash del video normalmente.
-    # Por ahora dejaremos un placeholder o implementación básica de subida si tienes el archivo.
-    # OpenSubtitles requiere hash de película para subir, lo cual es dificil si solo buscamos por texto.
-    # Nos centraremos en la descarga y traducción primero.
+    # Note: Upload is complex and usually requires video hash.
+    # For now we leave a placeholder or basic upload implementation if you have the file.
+    # OpenSubtitles requires video hash to upload, which is hard if we only search by text.
+    # We will focus on download and translation first.

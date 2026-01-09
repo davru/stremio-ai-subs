@@ -13,9 +13,9 @@ from app.services.uploader import StremioUploader
 
 app = FastAPI()
 
-# Servir archivos estáticos (frontend)
+# Serve static files (frontend)
 app.mount("/static", StaticFiles(directory="static"), name="static")
-# Directorio temporal
+# Temporary directory
 os.makedirs("temp", exist_ok=True)
 
 os_client = OpenSubtitlesClient()
@@ -29,10 +29,10 @@ class SearchRequest(BaseModel):
 class ProcessRequest(BaseModel):
     file_id: int
     file_name: str
-    imdb_id: str | None = None # Opcional, pero necesario para upload
+    imdb_id: str | None = None # Optional, but necessary for upload
     title: str | None = None
     year: str | int | None = None
-    content_type: str = "movie"  # "movie" o "series"
+    content_type: str = "movie"  # "movie" or "series"
     season_number: int | None = None
     episode_number: int | None = None
 
@@ -41,16 +41,16 @@ def cleanup_file(path: str):
         if os.path.exists(path):
             os.remove(path)
     except Exception as e:
-        print(f"Error borrando temp: {e}")
+        print(f"Error deleting temp: {e}")
 
 async def run_upload_task(file_path: str, imdb_id: str, content_type: str = "movie", season: int = None, episode: int = None):
     if imdb_id:
         success = await uploader.upload_subtitle(file_path, imdb_id, content_type, season, episode)
         if success:
-            print("🎉 Subida completada exitosamente.")
+            print("🎉 Upload completed successfully.")
         else:
-            print("⚠️ La subida falló.")
-    # Limpiar archivo despues de intentar subir
+            print("⚠️ Upload failed.")
+    # Cleanup file after attempt to upload
     cleanup_file(file_path)
 
 @app.get("/")
@@ -59,14 +59,14 @@ async def read_root():
 
 @app.get("/api/search_media")
 async def search_media(query: str):
-    """Buscamos películas/series en IMDb (Endpoint sugerencias)"""
+    """Search movies/series on IMDb (Suggestion endpoint)"""
     return imdb_service.search_content(query)
 
 @app.get("/api/search_subtitles")
 async def search_subtitles(imdb_id: str, kind: str = "movie"):
-    """Buscamos subtítulos en OpenSubtitles usando el ID de IMDb"""
+    """Search subtitles on OpenSubtitles using IMDb ID"""
     try:
-        # Si es una serie, usar parent_imdb_id
+        # If it is a series, use parent_imdb_id
         is_series = kind.lower() in ['tv series', 'tv mini-series', 'series']
         
         if is_series:
@@ -74,7 +74,7 @@ async def search_subtitles(imdb_id: str, kind: str = "movie"):
         else:
             results = os_client.search(imdb_id=imdb_id)
             
-        # Simplificar respuesta para el frontend
+        # Simplify response for frontend
         simplified = []
         for item in results:
             attrs = item.get('attributes', {})
@@ -83,15 +83,15 @@ async def search_subtitles(imdb_id: str, kind: str = "movie"):
                 file_id = files[0].get('file_id')
                 file_name = files[0].get('file_name')
                 
-                # Extraer season y episode de feature_details si existen
+                # Extract season and episode from feature_details if they exist
                 feature_details = attrs.get('feature_details', {})
                 season_num = feature_details.get('season_number')
                 episode_num = feature_details.get('episode_number')
                 
-                # Si no están en feature_details, intentar extraerlos del nombre del archivo (fallback)
+                # If not in feature_details, try to extract from filename (fallback)
                 if not season_num or not episode_num:
                     import re
-                    # Regex para S01E01, 1x01, etc.
+                    # Regex for S01E01, 1x01, etc.
                     match = re.search(r'[sS](\d+)[eE](\d+)', file_name)
                     if match:
                         season_num = int(match.group(1))

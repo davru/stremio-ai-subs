@@ -6,20 +6,20 @@ class IMDBService:
 
     def search_content(self, query):
         """
-        Busca películas o series usando el endpoint de sugerencias de IMDb (no oficial pero rápido).
+        Search movies or series using IMDb suggestion endpoint (unofficial but fast).
         """
         if not query:
             return []
             
-        # El endpoint necesita la primera letra para el path
+        # Endpoint needs the first letter for the path
         first_char = query[0].lower()
-        # Limpiar query para url
+        # Clean query for url
         clean_query = requests.utils.quote(query.lower())
         
         url = f"https://v2.sg.media-imdb.com/suggestion/{first_char}/{clean_query}.json"
         
         try:
-            # Necesitamos un User-Agent de navegador para que no nos bloqueen
+            # We need a browser User-Agent to avoid blocking
             headers = {
                 "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36"
             }
@@ -29,17 +29,17 @@ class IMDBService:
             results = []
             if 'd' in data:
                 for item in data['d']:
-                    # extraemos datos relevantes
-                    # id suele ser 'tt1234567'
+                    # extract relevant data
+                    # id is usually 'tt1234567'
                     imdb_id = item.get('id')
                     title = item.get('l')
                     year = item.get('y')
                     kind = item.get('q') # feature, TV series, etc.
                     cover = item.get('i', {}).get('imageUrl')
                     
-                    # Filtramos solo items que parecen peliculas o series (tienen año y titulo)
+                    # Filter only items that look like movies or series (have year and title)
                     if imdb_id and title:
-                        # OpenSubtitles requiere el ID, el usuario indica mantener el 'tt'
+                        # OpenSubtitles requires ID, user indicates keeping 'tt'
                         
                         results.append({
                             "imdb_id": imdb_id, # 'tt1234567'
@@ -53,5 +53,5 @@ class IMDBService:
             return results
             
         except Exception as e:
-            print(f"Error buscando en IMDb (API Sugerencias): {e}")
+            print(f"Error searching on IMDb (Suggestion API): {e}")
             return []
